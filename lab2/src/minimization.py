@@ -136,16 +136,151 @@ class MinimizationCalculator:
     def minimize_karnaugh_dnf(self) -> Tuple[List[Term], str]:
         ones_indices = set(self.truth_table.get_ones_indices())
         if not ones_indices: return [], "Функция тождественно равна 0"
-        if self.num_vars < 2 or self.num_vars > 4: 
-            return [], f"Карта Карно поддерживает 2-4 переменные, а у вас {self.num_vars}"
+        if self.num_vars < 2 or self.num_vars > 5:
+            return [], f"Карта Карно поддерживает 2-5 переменные, а у вас {self.num_vars}"
         
         gray_code = [0, 1, 3, 2]
-        karnaugh_map = self._build_karnaugh_map(gray_code)
-        groups = self._find_groups(karnaugh_map, ones_indices, gray_code)
-        terms = self._groups_to_terms_dnf(groups, gray_code)
-        visualization = self._visualize_karnaugh_dnf(karnaugh_map, groups, gray_code, ones_indices)
-        return terms, visualization
+        if self.num_vars == 5:
+            return self._karnaugh_5var_dnf(ones_indices, gray_code)
+        else:
+            # Ваш существующий код для 3-4 переменных
+            karnaugh_map = self._build_karnaugh_map(gray_code)
+            groups = self._find_groups(karnaugh_map, ones_indices, gray_code)
+            terms = self._groups_to_terms_dnf(groups, gray_code)
+            visualization = self._visualize_karnaugh_dnf(karnaugh_map, groups, gray_code, ones_indices)
+            return terms, visualization
 
+    def minimize_karnaugh_cnf(self) -> Tuple[List[Term], str]:
+        zeros_indices = set(self.truth_table.get_zeros_indices())
+        if not zeros_indices: return [], "Функция тождественно равна 1"
+        if self.num_vars < 2 or self.num_vars > 5:
+            return [], f"Карта Карно поддерживает 2-5 переменные, а у вас {self.num_vars}"
+        
+        gray_code = [0, 1, 3, 2]
+        if self.num_vars == 5:
+            return self._karnaugh_5var_cnf(zeros_indices, gray_code)
+        else:
+            # Ваш существующий код для 3-4 переменных
+            karnaugh_map = self._build_karnaugh_map(gray_code)
+            groups = self._find_groups(karnaugh_map, zeros_indices, gray_code)
+            terms = self._groups_to_terms_cnf(groups, gray_code)
+            visualization = self._visualize_karnaugh_cnf(karnaugh_map, groups, gray_code, zeros_indices)
+            return terms, visualization
+
+    # ==================== 5-ПЕРЕМЕННЫЕ ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+
+    def _karnaugh_5var_dnf(self, target_indices: Set[int], gray_code: List[int]) -> Tuple[List[Term], str]:
+        map_5 = [[[0]*4 for _ in range(4)] for _ in range(2)]
+        for a in range(2):
+            for r in range(4):
+                for c in range(4):
+                    idx = (a << 4) | (gray_code[r] << 2) | gray_code[c]
+                    map_5[a][r][c] = idx
+
+        matrix = [[[1 if map_5[a][r][c] in target_indices else 0 for c in range(4)] for r in range(4)] for a in range(2)]
+        groups = self._find_groups_5var(matrix)
+        terms = self._groups_to_terms_5var(groups, map_5, is_cnf=False)
+        viz = self._visualize_karnaugh_5var(map_5, groups, target_indices, is_cnf=False)
+        return terms, viz
+
+    def _karnaugh_5var_cnf(self, target_indices: Set[int], gray_code: List[int]) -> Tuple[List[Term], str]:
+        map_5 = [[[0]*4 for _ in range(4)] for _ in range(2)]
+        for a in range(2):
+            for r in range(4):
+                for c in range(4):
+                    idx = (a << 4) | (gray_code[r] << 2) | gray_code[c]
+                    map_5[a][r][c] = idx
+
+        matrix = [[[1 if map_5[a][r][c] in target_indices else 0 for c in range(4)] for r in range(4)] for a in range(2)]
+        groups = self._find_groups_5var(matrix)
+        terms = self._groups_to_terms_5var(groups, map_5, is_cnf=True)
+        viz = self._visualize_karnaugh_5var(map_5, groups, target_indices, is_cnf=True)
+        return terms, viz
+
+    def _find_groups_5var(self, matrix: List[List[List[int]]]) -> List[List[Tuple[int, int, int]]]:
+        groups = []
+        # Все возможные размеры прямоугольных параллелепипедов (depth, height, width)
+        dims = [(2,4,4), (2,4,2), (2,2,4), (2,2,2), (1,4,4), (1,4,2), (1,2,4), (1,2,2), (2,4,1), (2,2,1), (1,4,1), (1,2,1), (2,1,1), (1,1,1)]
+        
+        for d, h, w in dims:
+            for a0 in range(2 - d + 1):
+                for r0 in range(4):
+                    for c0 in range(4):
+                        group = []
+                        valid = True
+                        for da in range(d):
+                            for dh in range(h):
+                                for dw in range(w):
+                                    r = (r0 + dh) % 4
+                                    c = (c0 + dw) % 4
+                                    if matrix[(a0 + da) % 2][r][c] == 1:
+                                        group.append(((a0 + da) % 2, r, c))
+                                    else:
+                                        valid = False
+                                        break
+                                if not valid: break
+                            if not valid: break
+                        if valid and group:
+                            if not any(set(group).issubset(set(g)) for g in groups):
+                                groups.append(group)
+        groups.sort(key=len, reverse=True)
+        return groups
+
+    def _groups_to_terms_5var(self, groups: List[List[Tuple[int, int, int]]], 
+                              map_5: List[List[List[int]]], is_cnf: bool) -> List[Term]:
+        terms = []
+        for group in groups:
+            masks = [set() for _ in range(5)] # a, b, c, d, e
+            for a, r, c in group:
+                idx = map_5[a][r][c]
+                masks[0].add(bool((idx >> 4) & 1))
+                masks[1].add(bool((idx >> 3) & 1))
+                masks[2].add(bool((idx >> 2) & 1))
+                masks[3].add(bool((idx >> 1) & 1))
+                masks[4].add(bool(idx & 1))
+
+            mask = [None]*5
+            for i, s in enumerate(masks):
+                if len(s) == 1: mask[i] = s.pop()
+            
+            if is_cnf:
+                mask = [None if m is None else not m for m in mask]
+                
+            if any(m is not None for m in mask):
+                terms.append(Term(self.variables, mask, is_cnf=is_cnf))
+        return self._remove_duplicates(terms)
+
+    def _visualize_karnaugh_5var(self, map_5: List[List[List[int]]], 
+                                 groups: List[List[Tuple[int, int, int]]], 
+                                 target_indices: Set[int], is_cnf: bool) -> str:
+        lines = [f"Карта Карно (5 переменных, {'по нулям' if is_cnf else 'по единицам'})", ""]
+        gray = [0, 1, 3, 2]
+        
+        lines.append("         de")
+        lines.append("         00  01  11  10          00  01  11  10")
+        lines.append("       bc +---------------      bc +---------------")
+        
+        for r in range(4):
+            r_label = f"{gray[r]:02b}"
+            line0 = f"a=0 {r_label} | "
+            line1 = f"a=1 {r_label} | "
+            for c in range(4):
+                idx0 = map_5[0][r][c]
+                idx1 = map_5[1][r][c]
+                val0 = 1 if idx0 in target_indices else 0
+                val1 = 1 if idx1 in target_indices else 0
+                line0 += f" {val0}  "
+                line1 += f" {val1}  "
+            lines.append(line0 + "    " + line1)
+            
+        lines.append("\nГруппы:")
+        for i, g in enumerate(groups, 1):
+            # Форматируем координаты для читаемости: a=0, row=01, col=10
+            coords = []
+            for a, r, c in g:
+                coords.append(f"(a={a}, bc={gray[r]:02b}, de={gray[c]:02b})")
+            lines.append(f"Группа {i}: {coords[0]} ... ({len(g)} ячеек)")
+        return "\n".join(lines)
     # ==================== КНФ МЕТОДЫ ====================
 
     def get_sknf_terms(self) -> List[Term]:
@@ -201,18 +336,6 @@ class MinimizationCalculator:
         coverage_table = self._build_coverage_table_cnf(terms)
         return stages, terms, coverage_table
 
-    def minimize_karnaugh_cnf(self) -> Tuple[List[Term], str]:
-        zeros_indices = set(self.truth_table.get_zeros_indices())
-        if not zeros_indices: return [], "Функция тождественно равна 1"
-        if self.num_vars < 2 or self.num_vars > 4: 
-            return [], f"Карта Карно поддерживает 2-4 переменные, а у вас {self.num_vars}"
-        
-        gray_code = [0, 1, 3, 2]
-        karnaugh_map = self._build_karnaugh_map(gray_code)
-        groups = self._find_groups(karnaugh_map, zeros_indices, gray_code)
-        terms = self._groups_to_terms_cnf(groups, gray_code)
-        visualization = self._visualize_karnaugh_cnf(karnaugh_map, groups, gray_code, zeros_indices)
-        return terms, visualization
 
     # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 
